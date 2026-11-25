@@ -288,121 +288,167 @@ except Exception as error:
 
 
 # -------------------------------------------------
-# 7. Sidebar: county filter
+# 7. Reusable chart with filters above it
 # -------------------------------------------------
-st.sidebar.header("Filters")
+def display_chart_with_filters(data, key_prefix):
+    county_key = f"{key_prefix}_county"
+    facility_key = f"{key_prefix}_facility"
 
-county_options = ["All"] + sorted(
-    filtered_df["County"]
-    .dropna()
-    .unique()
-    .tolist()
-)
+    # Place the filters side by side above the graph.
+    county_col, facility_col = st.columns(2)
 
-if st.session_state.get("selected_county") not in county_options:
-    st.session_state["selected_county"] = "All"
+    # County filter.
+    county_options = ["All"] + sorted(
+        data["County"]
+        .dropna()
+        .unique()
+        .tolist()
+    )
 
-selected_county = st.sidebar.selectbox(
-    "County",
-    options=county_options,
-    key="selected_county"
-)
+    if st.session_state.get(county_key) not in county_options:
+        st.session_state[county_key] = "All"
 
-county_df = filtered_df.copy()
+    with county_col:
+        selected_county = st.selectbox(
+            "County",
+            options=county_options,
+            key=county_key
+        )
 
-if selected_county != "All":
-    county_df = county_df.loc[
-        county_df["County"] == selected_county
-    ].copy()
+    county_df = data.copy()
+
+    if selected_county != "All":
+        county_df = county_df.loc[
+            county_df["County"] == selected_county
+        ].copy()
+
+    # Facility options depend on the selected county.
+    facility_options = ["All"] + sorted(
+        county_df["Facility"]
+        .dropna()
+        .unique()
+        .tolist()
+    )
+
+    if st.session_state.get(facility_key) not in facility_options:
+        st.session_state[facility_key] = "All"
+
+    with facility_col:
+        selected_facility = st.selectbox(
+            "Facility",
+            options=facility_options,
+            key=facility_key
+        )
+
+    plot_df = county_df.copy()
+
+    if selected_facility != "All":
+        plot_df = plot_df.loc[
+            plot_df["Facility"] == selected_facility
+        ].copy()
+
+    if plot_df.empty:
+        st.info("No data available for the selected filters.")
+        return
+
+    # Aggregate monthly uptake.
+    grouped = (
+        plot_df.groupby(
+            "Period_Date",
+            as_index=False
+        )["FP_Uptake"]
+        .sum()
+        .sort_values("Period_Date")
+    )
+
+    grouped["Period_Month"] = (
+        grouped["Period_Date"]
+        .dt.strftime("%b %Y")
+    )
+
+    # Draw the chart.
+    fig, ax = plt.subplots(figsize=(16, 7))
+
+    ax.plot(
+        grouped["Period_Date"],
+        grouped["FP_Uptake"],
+        marker="o",
+        color="#1f77b4",
+        linewidth=2
+    )
+
+    ax.set_title(
+        f"FP Uptake Trend\n"
+        f"County: {selected_county} | "
+        f"Facility: {selected_facility}",
+        fontsize=14,
+        fontweight="bold"
+    )
+
+    ax.set_xlabel(
+        "Reporting Month",
+        fontsize=12
+    )
+
+    ax.set_ylabel(
+        "FP Uptake (Sum)",
+        fontsize=12
+    )
+
+    ax.set_xticks(
+        grouped["Period_Date"]
+    )
+
+    ax.set_xticklabels(
+        grouped["Period_Month"],
+        rotation=45,
+        ha="right"
+    )
+
+    ax.grid(
+        True,
+        linestyle="--",
+        alpha=0.5
+    )
+
+    fig.tight_layout()
+
+    st.pyplot(fig)
+    plt.close(fig)
 
 
 # -------------------------------------------------
-# 8. Sidebar: facility filter
+# 8. Expanded window containing filters and chart
 # -------------------------------------------------
-facility_options = ["All"] + sorted(
-    county_df["Facility"]
-    .dropna()
-    .unique()
-    .tolist()
-)
-
-if st.session_state.get("selected_facility") not in facility_options:
-    st.session_state["selected_facility"] = "All"
-
-selected_facility = st.sidebar.selectbox(
-    "Facility",
-    options=facility_options,
-    key="selected_facility"
-)
-
-plot_df = county_df.copy()
-
-if selected_facility != "All":
-    plot_df = plot_df.loc[
-        plot_df["Facility"] == selected_facility
-    ].copy()
-
-if plot_df.empty:
-    st.info("No data available for the selected filters.")
-    st.stop()
+@st.dialog("FP Uptake Trend — Expanded View", width="large")
+def show_expanded_chart():
+    display_chart_with_filters(
+        data=filtered_df,
+        key_prefix="expanded"
+    )
 
 
 # -------------------------------------------------
-# 9. Aggregate monthly FP uptake
+# 9. Main page
 # -------------------------------------------------
-grouped = (
-    plot_df.groupby(
-        "Period_Date",
-        as_index=False
-    )["FP_Uptake"]
-    .sum()
-    .sort_values("Period_Date")
+expand_clicked = st.button(
+    "Expand chart with filters",
+    key="expand_chart_button"
 )
 
-grouped["Period_Month"] = (
-    grouped["Period_Date"]
-    .dt.strftime("%b %Y")
+display_chart_with_filters(
+    data=filtered_df,
+    key_prefix="main"
 )
 
+if expand_clicked:
+    # Start the expanded view with the main chart's selections.
+    st.session_state["expanded_county"] = (
+        st.session_state.get("main_county", "All")
+    )
 
-# -------------------------------------------------
-# 10. Display the chart only
-# -------------------------------------------------
-fig, ax = plt.subplots(figsize=(16, 7))
+    st.session_state["expanded_facility"] = (
+        st.session_state.get("main_facility", "All")
+    )
 
-ax.plot(
-    grouped["Period_Date"],
-    grouped["FP_Uptake"],
-    marker="o",
-    color="#1f77b4",
-    linewidth=2
-)
-
-ax.set_title(
-    f"FP Uptake Trend\n"
-    f"County: {selected_county} | Facility: {selected_facility}",
-    fontsize=14,
-    fontweight="bold"
-)
-
-ax.set_xlabel("Reporting Month", fontsize=12)
-ax.set_ylabel("FP Uptake (Sum)", fontsize=12)
-
-ax.set_xticks(grouped["Period_Date"])
-
-ax.set_xticklabels(
-    grouped["Period_Month"],
-    rotation=45,
-    ha="right"
-)
-
-ax.grid(
-    True,
-    linestyle="--",
-    alpha=0.5
-)
-
-fig.tight_layout()
-
-st.pyplot(fig)
-plt.close(fig)
+    show_expanded_chart()
