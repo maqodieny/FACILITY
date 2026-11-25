@@ -93,7 +93,7 @@ target_facilities = [
 # 4. Upload and read the Excel file
 # -------------------------------------------------
 uploaded_file = st.sidebar.file_uploader(
-    "Upload Data_for_use.xlsx",
+    "https://github.com/maqodieny/FACILITY/blob/main/Data_for_use.xlsx",
     type=["xlsx"]
 )
 
