@@ -22,8 +22,7 @@ st.set_page_config(
 # Replace this with your actual GitHub Excel file URL.
 # Include the correct branch and any folders in the file path.
 GITHUB_FILE_URL = (
-    "https://raw.githubusercontent.com/"
-    "YOUR_USERNAME/YOUR_REPOSITORY/main/Data_for_use.xlsx"
+    https://github.com/maqodieny/FACILITY/blob/main/Data_for_use.xlsx"
 )
 
 
