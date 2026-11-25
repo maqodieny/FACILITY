@@ -1,4 +1,5 @@
-import importlib.util
+from io import BytesIO
+from urllib.request import urlopen
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -9,40 +10,19 @@ import streamlit as st
 # 1. Configure the page
 # -------------------------------------------------
 st.set_page_config(
-    page_title="FP Uptake Dashboard",
+    page_title="FP Uptake Trend",
     layout="wide"
 )
 
-st.title("Family Planning Uptake Dashboard")
 
-st.write(
-    "Upload your Excel dataset and select a county or facility "
-    "to view monthly family planning uptake."
+# -------------------------------------------------
+# 2. GitHub Excel file location
+# -------------------------------------------------
+# Replace this with the raw URL of your Excel file.
+GITHUB_FILE_URL = (
+    "https://raw.githubusercontent.com/"
+    "YOUR_USERNAME/YOUR_REPOSITORY/main/Data_for_use.xlsx"
 )
-
-
-# -------------------------------------------------
-# 2. Check the Excel dependency
-# -------------------------------------------------
-if importlib.util.find_spec("openpyxl") is None:
-    st.error(
-        "The openpyxl package is not installed in the environment "
-        "running this app."
-    )
-
-    st.write("For a local installation, run this in your terminal:")
-
-    st.code(
-        "python -m pip install --upgrade openpyxl",
-        language="bash"
-    )
-
-    st.write(
-        "Then restart the app. If you are using Streamlit Community "
-        "Cloud, add openpyxl to your requirements.txt file."
-    )
-
-    st.stop()
 
 
 # -------------------------------------------------
@@ -108,197 +88,133 @@ target_facilities = [
 
 
 # -------------------------------------------------
-# 5. Upload and read the Excel file
+# 5. Load and prepare the GitHub dataset
 # -------------------------------------------------
-uploaded_file = st.sidebar.file_uploader(
-    "Upload Data_for_use.xlsx",
-    type=["xlsx"]
-)
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_data(file_url):
+    # Download the Excel file with a connection timeout.
+    with urlopen(file_url, timeout=30) as response:
+        excel_bytes = response.read()
 
-if uploaded_file is None:
-    st.info("Upload an Excel file from the sidebar to get started.")
-    st.stop()
-
-try:
     dt = pd.read_excel(
-        uploaded_file,
+        BytesIO(excel_bytes),
         engine="openpyxl"
     )
 
-except ImportError as error:
+    # Clean column names.
+    dt.columns = dt.columns.astype(str).str.strip()
+
+    if dt.columns.duplicated().any():
+        duplicates = dt.columns[
+            dt.columns.duplicated()
+        ].tolist()
+
+        raise ValueError(
+            "Duplicate column names found: "
+            + ", ".join(duplicates)
+        )
+
+    # Validate required columns.
+    required_cols = ["Facility", "County", "periodid"]
+
+    missing_required = [
+        col for col in required_cols
+        if col not in dt.columns
+    ]
+
+    if missing_required:
+        raise ValueError(
+            "Missing required columns: "
+            + ", ".join(missing_required)
+        )
+
+    # Clean facility and county names.
+    dt["Facility"] = (
+        dt["Facility"]
+        .astype("string")
+        .str.strip()
+    )
+
+    dt["County"] = (
+        dt["County"]
+        .astype("string")
+        .str.strip()
+    )
+
+    # Retain only the target facilities.
+    dt = dt.loc[
+        dt["Facility"].isin(target_facilities)
+    ].copy()
+
+    if dt.empty:
+        raise ValueError(
+            "No matching target facilities were found in the dataset."
+        )
+
+    # Preserve the original calculation:
+    # missing FP columns and nonnumeric values count as zero.
+    for col in fp_cols:
+        if col not in dt.columns:
+            dt[col] = 0
+
+    dt[fp_cols] = (
+        dt[fp_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .fillna(0)
+    )
+
+    dt["FP_Uptake"] = dt[fp_cols].sum(axis=1)
+
+    # Convert YYYYMM periods to dates.
+    period_strings = (
+        dt["periodid"]
+        .astype("string")
+        .str.strip()
+        .str.replace(r"\.0+$", "", regex=True)
+    )
+
+    valid_period_format = period_strings.str.fullmatch(
+        r"\d{6}",
+        na=False
+    )
+
+    dt["Period_Date"] = pd.to_datetime(
+        period_strings.where(valid_period_format),
+        format="%Y%m",
+        errors="coerce"
+    )
+
+    dt = dt.dropna(
+        subset=["Period_Date"]
+    ).copy()
+
+    if dt.empty:
+        raise ValueError(
+            "No valid reporting periods were found. "
+            "Expected periodid format: YYYYMM, for example 202601."
+        )
+
+    return dt
+
+
+try:
+    filtered_df = load_data(GITHUB_FILE_URL)
+
+except ImportError:
     st.error(
-        "openpyxl could not be imported. Install or update it in "
-        "the Python environment running this app."
+        "The openpyxl package is missing or needs updating. "
+        "Add openpyxl to requirements.txt or install it using: "
+        "python -m pip install --upgrade openpyxl"
     )
-
-    st.code(
-        "python -m pip install --upgrade openpyxl",
-        language="bash"
-    )
-
-    with st.expander("View error details"):
-        st.write(str(error))
-
     st.stop()
 
 except Exception as error:
-    st.error(f"Unable to read the Excel file: {error}")
+    st.error(f"Unable to load the GitHub Excel file: {error}")
     st.stop()
 
 
 # -------------------------------------------------
-# 6. Clean and validate column names
-# -------------------------------------------------
-dt.columns = dt.columns.astype(str).str.strip()
-
-if dt.columns.duplicated().any():
-    duplicate_columns = dt.columns[
-        dt.columns.duplicated()
-    ].tolist()
-
-    st.error(
-        "Duplicate column names were found after removing whitespace: "
-        + ", ".join(duplicate_columns)
-    )
-    st.stop()
-
-required_cols = [
-    "Facility",
-    "County",
-    "periodid"
-]
-
-missing_required = [
-    col for col in required_cols
-    if col not in dt.columns
-]
-
-if missing_required:
-    st.error(
-        "The dataset is missing these required columns: "
-        + ", ".join(missing_required)
-    )
-    st.stop()
-
-dt["Facility"] = (
-    dt["Facility"]
-    .astype("string")
-    .str.strip()
-)
-
-dt["County"] = (
-    dt["County"]
-    .astype("string")
-    .str.strip()
-)
-
-
-# -------------------------------------------------
-# 7. Prepare FP indicators and calculate uptake
-# -------------------------------------------------
-missing_fp_cols = [
-    col for col in fp_cols
-    if col not in dt.columns
-]
-
-if missing_fp_cols:
-    st.warning(
-        f"{len(missing_fp_cols)} FP indicator column(s) are missing "
-        "and will be treated as zero. Totals may be understated."
-    )
-
-    with st.expander("View missing FP indicator columns"):
-        for col in missing_fp_cols:
-            st.write(col)
-
-    for col in missing_fp_cols:
-        dt[col] = 0
-
-numeric_fp = dt[fp_cols].apply(
-    pd.to_numeric,
-    errors="coerce"
-)
-
-invalid_numeric = (
-    dt[fp_cols].notna()
-    & numeric_fp.isna()
-)
-
-invalid_count = int(
-    invalid_numeric.sum().sum()
-)
-
-if invalid_count:
-    st.warning(
-        f"{invalid_count:,} nonnumeric FP value(s) could not be "
-        "converted and will be treated as zero."
-    )
-
-dt[fp_cols] = numeric_fp.fillna(0)
-
-dt["FP_Uptake"] = dt[fp_cols].sum(axis=1)
-
-
-# -------------------------------------------------
-# 8. Filter to target facilities
-# -------------------------------------------------
-filtered_df = dt.loc[
-    dt["Facility"].isin(target_facilities)
-].copy()
-
-if filtered_df.empty:
-    st.warning(
-        "No matching target facilities were found. "
-        "Check the facility names in your Excel file."
-    )
-    st.stop()
-
-
-# -------------------------------------------------
-# 9. Convert reporting periods to dates
-# -------------------------------------------------
-# Expected periodid format: YYYYMM, for example 202601.
-period_strings = (
-    filtered_df["periodid"]
-    .astype("string")
-    .str.strip()
-    .str.replace(r"\.0+$", "", regex=True)
-)
-
-# Require exactly six digits before parsing.
-valid_period_format = period_strings.str.fullmatch(
-    r"\d{6}",
-    na=False
-)
-
-filtered_df["Period_Date"] = pd.to_datetime(
-    period_strings.where(valid_period_format),
-    format="%Y%m",
-    errors="coerce"
-)
-
-invalid_period_count = int(
-    filtered_df["Period_Date"].isna().sum()
-)
-
-if invalid_period_count:
-    st.warning(
-        f"{invalid_period_count:,} row(s) have missing or invalid "
-        "reporting periods and will be excluded. "
-        "Expected format: YYYYMM, for example 202601."
-    )
-
-filtered_df = filtered_df.dropna(
-    subset=["Period_Date"]
-).copy()
-
-if filtered_df.empty:
-    st.warning("No rows with valid reporting periods are available.")
-    st.stop()
-
-
-# -------------------------------------------------
-# 10. Create county and facility filters
+# 6. Sidebar filters
 # -------------------------------------------------
 st.sidebar.header("Filters")
 
@@ -341,23 +257,23 @@ selected_facility = st.sidebar.selectbox(
     key="selected_facility"
 )
 
-temp_df = county_df.copy()
+plot_df = county_df.copy()
 
 if selected_facility != "All":
-    temp_df = temp_df.loc[
-        temp_df["Facility"] == selected_facility
+    plot_df = plot_df.loc[
+        plot_df["Facility"] == selected_facility
     ].copy()
 
-if temp_df.empty:
-    st.warning("No data available for the selected filters.")
+if plot_df.empty:
+    st.info("No data available for the selected filters.")
     st.stop()
 
 
 # -------------------------------------------------
-# 11. Aggregate monthly FP uptake
+# 7. Aggregate monthly FP uptake
 # -------------------------------------------------
 grouped = (
-    temp_df.groupby(
+    plot_df.groupby(
         "Period_Date",
         as_index=False
     )["FP_Uptake"]
@@ -372,34 +288,8 @@ grouped["Period_Month"] = (
 
 
 # -------------------------------------------------
-# 12. Display summary indicators
+# 8. Display only the chart
 # -------------------------------------------------
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.metric(
-        "Total FP Uptake",
-        f"{grouped['FP_Uptake'].sum():,.0f}"
-    )
-
-with col2:
-    st.metric(
-        "Facilities in Selection",
-        f"{temp_df['Facility'].nunique():,}"
-    )
-
-with col3:
-    st.metric(
-        "Reporting Months",
-        f"{len(grouped):,}"
-    )
-
-
-# -------------------------------------------------
-# 13. Plot the FP uptake trend
-# -------------------------------------------------
-st.subheader("Monthly FP Uptake Trend")
-
 fig, ax = plt.subplots(figsize=(16, 7))
 
 ax.plot(
@@ -411,25 +301,16 @@ ax.plot(
 )
 
 ax.set_title(
-    f"FP Uptake Trend — County: {selected_county} | "
-    f"Facility: {selected_facility}",
+    f"FP Uptake Trend\n"
+    f"County: {selected_county} | Facility: {selected_facility}",
     fontsize=14,
     fontweight="bold"
 )
 
-ax.set_xlabel(
-    "Reporting Month",
-    fontsize=12
-)
+ax.set_xlabel("Reporting Month", fontsize=12)
+ax.set_ylabel("FP Uptake (Sum)", fontsize=12)
 
-ax.set_ylabel(
-    "FP Uptake (Sum)",
-    fontsize=12
-)
-
-ax.set_xticks(
-    grouped["Period_Date"]
-)
+ax.set_xticks(grouped["Period_Date"])
 
 ax.set_xticklabels(
     grouped["Period_Month"],
@@ -447,36 +328,3 @@ fig.tight_layout()
 
 st.pyplot(fig)
 plt.close(fig)
-
-st.caption(
-    "FP uptake is the sum of the specified indicators. "
-    "Months without records are not automatically filled with zero."
-)
-
-
-# -------------------------------------------------
-# 14. Display and download the monthly summary
-# -------------------------------------------------
-summary_table = grouped[
-    ["Period_Month", "FP_Uptake"]
-].rename(
-    columns={
-        "Period_Month": "Reporting Month",
-        "FP_Uptake": "FP Uptake"
-    }
-)
-
-with st.expander("View monthly summary"):
-    st.dataframe(
-        summary_table,
-        hide_index=True
-    )
-
-st.download_button(
-    label="Download Monthly Summary as CSV",
-    data=summary_table.to_csv(
-        index=False
-    ).encode("utf-8"),
-    file_name="fp_uptake_monthly_summary.csv",
-    mime="text/csv"
-)
