@@ -20,8 +20,7 @@ st.set_page_config(
 # -------------------------------------------------
 # Replace this with the raw URL of your Excel file.
 GITHUB_FILE_URL = (
-    "https://raw.githubusercontent.com/"
-    "YOUR_USERNAME/YOUR_REPOSITORY/main/Data_for_use.xlsx"
+    "https://github.com/maqodieny/FACILITY/blob/main/Data_for_use.xlsx"
 )
 
 
